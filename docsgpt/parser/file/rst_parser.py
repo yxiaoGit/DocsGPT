@@ -9,6 +9,22 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from docsgpt.parser.file.base_parser import BaseParser
 
+# A directive marker, as docutils recognizes one: optional indentation, "..",
+# required whitespace, a directive name, then "::". The name is docutils'
+# ``simplename`` (alphanumerics, with isolated internal "-", ".", "_", "+",
+# or ":"), so an ellipsis or a comment cannot be mistaken for a directive.
+# Whitespace after "::" is part of the marker; end-of-line needs none.
+_RST_DIRECTIVE_MARKER = re.compile(
+    r"""
+    ^[ \t]*                         # indentation is part of the marker
+    \.\.[ \t]+                      # explicit markup start
+    (?:(?!_)\w)+(?:[-._+:](?:(?!_)\w)+)*
+    [ \t]*::                        # optional space, then the delimiter
+    (?:[ \t]+|(?=\r?$))             # marker ends at trailing space or EOL
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
 
 class RstParser(BaseParser):
     """reStructuredText parser.
@@ -121,10 +137,21 @@ class RstParser(BaseParser):
         return content
 
     def remove_directives(self, content: str) -> str:
-        """Removes reStructuredText Directives"""
-        pattern = r"`\.\.([^:]+)::"
-        content = re.sub(pattern, "", content)
-        return content
+        """Remove reStructuredText directive markers, keeping their content.
+
+        Standard directives start a line (aside from indentation) with ``..``,
+        whitespace, the directive name, and ``::``. Only that marker is
+        removed, so ``.. note:: Important information`` becomes
+        ``Important information``. Comments, hyperlink targets, footnotes,
+        and a literal-block ``::`` are left as they are.
+
+        Args:
+            content: reStructuredText source.
+
+        Returns:
+            The source with directive markers removed.
+        """
+        return _RST_DIRECTIVE_MARKER.sub("", content)
 
     def remove_interpreters(self, content: str) -> str:
         """Removes reStructuredText Interpreted Text Roles"""

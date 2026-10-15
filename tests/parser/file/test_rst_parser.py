@@ -82,12 +82,74 @@ def test_remove_images():
 
 
 def test_remove_directives():
-    """Test directive removal functionality."""
+    """Standard directive markers are removed and their inline text is kept.
+
+    Regression for https://github.com/arc53/DocsGPT/issues/2770. The marker
+    is ``..``, required whitespace, the directive name, and ``::``.
+    """
     parser = RstParser()
-    content = "Text with `..note::` directive and more text"
+    content = "Text before\n.. note:: Important information\nText after"
     result = parser.remove_directives(content)
-    # The regex pattern looks for `..something::` so it should remove `..note::`
-    assert result == "Text with ` directive and more text"
+    assert result == "Text before\nImportant information\nText after"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (".. warning:: Careful\n", "Careful\n"),
+        (
+            ".. code-block:: python\n\n   print('hi')\n",
+            "python\n\n   print('hi')\n",
+        ),
+        ("Body\n    .. warning:: Careful\n", "Body\nCareful\n"),
+        ("Body\n\t.. warning:: Careful", "Body\nCareful"),
+        ("..   note:: Important", "Important"),
+        (".. note :: Important", "Important"),
+        (".. note  :: Important", "Important"),
+        (".. py:function:: spam(eggs)\n", "spam(eggs)\n"),
+        (".. my+directive:: value", "value"),
+        (".. code_block:: value", "value"),
+        (
+            "Text before\n.. note::\n\n   Important information\nText after",
+            "Text before\n\n\n   Important information\nText after",
+        ),
+        (".. note:: one\n.. warning:: two\n", "one\ntwo\n"),
+        (
+            "Text before\r\n.. note:: Important information\r\nText after",
+            "Text before\r\nImportant information\r\nText after",
+        ),
+        (".. note:: Done", "Done"),
+        (".. note::\nNext", "\nNext"),
+        (".. admonition:: See also: details\n", "See also: details\n"),
+        ("", ""),
+    ],
+)
+def test_remove_directives_related_forms(content, expected):
+    """Directive markers with real RST spelling still leave their content."""
+    parser = RstParser()
+    assert parser.remove_directives(content) == expected
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Install it ... then run the following::",
+        "end of paragraph ..\n\nNext line has a marker:: here",
+        "Read the following::\n\n    code\n",
+        ".. Danger: modify at your own risk!\n",
+        ".. _docs: https://example.com\n",
+        ".. [1] A footnote.\n",
+        ".. |biohazard| image:: biohazard.png\n",
+        "Text with `..note::` directive and more text",
+        "..note:: Important information",
+        "See the docs .. note:: here",
+        ".. code--block:: python",
+    ],
+)
+def test_remove_directives_leaves_non_directives(content):
+    """Comments, targets, ellipses, and invalid markers are not directives."""
+    parser = RstParser()
+    assert parser.remove_directives(content) == content
 
 
 def test_remove_interpreters():
@@ -267,7 +329,7 @@ Text with `link <http://example.com>`_ and :doc:`reference`.
 | A   | B   |
 +-----+-----+
 
-`..note::` This is a note."""
+.. note:: This is a note."""
 
     with patch("builtins.open", mock_open(read_data=content)):
         result = parser.parse_file(Path("test.rst"))
@@ -279,6 +341,27 @@ Text with `link <http://example.com>`_ and :doc:`reference`.
     assert ":doc:" not in joined_result  # interpreters removed
     assert ".. image::" not in joined_result  # images removed
     assert "+-----+" not in joined_result  # table excess removed
-    # The directive pattern looks for `..something::` so regular .. note:: won't be removed
-    # but `..note::` will be removed
-    assert "`..note::`" not in joined_result  # directives removed
+    assert ".. note::" not in joined_result  # directive marker removed
+    assert "This is a note" in joined_result  # directive content kept
+
+
+def test_parse_tups_respects_remove_directives_flag():
+    """The parse path strips directives only when the option is enabled."""
+    content = "Text before\n.. note:: Important information\nText after"
+    enabled = RstParser()
+    disabled = RstParser(remove_directives=False)
+
+    with patch("builtins.open", mock_open(read_data=content)):
+        enabled_text = "\n".join(
+            text for _, text in enabled.parse_tups(Path("test.rst"), max_tokens=None)
+        )
+    with patch("builtins.open", mock_open(read_data=content)):
+        disabled_text = "\n".join(
+            text for _, text in disabled.parse_tups(Path("test.rst"), max_tokens=None)
+        )
+
+    assert ".. note::" not in enabled_text
+    assert "Important information" in enabled_text
+    assert "Text before" in enabled_text
+    assert "Text after" in enabled_text
+    assert ".. note:: Important information" in disabled_text
